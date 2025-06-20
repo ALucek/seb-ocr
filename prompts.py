@@ -1,11 +1,3 @@
-# prompts.py
-
-"""Prompt templates shared across the OCR pipeline.
-
-The templates are kept in a standalone module so that they can be edited
-or swapped without touching the processing logic.
-"""
-
 HISTORICAL_DOCUMENT_PROMPT: str = """
 You are an expert OCR system for historical documents. Your task has TWO mandatory phases:
 
