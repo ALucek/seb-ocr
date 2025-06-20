@@ -18,10 +18,11 @@ A vision language model pipeline for transcribing scanned historical documents w
     uv sync
     ```
 
-3.  Add your Gemini API key to a `.env` file:
+3.  Create a `.env` file for your relevant environment variables.
 
     ```ini
     GEMINI_API_KEY="your-secret-key"
+    PROMPT="HISTORICAL_DOCUMENT_PROMPT"
     # Optionally override the model
     # GEMINI_MODEL="gemini-2.5-flash"
     ```

@@ -3,6 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import List
@@ -10,7 +11,7 @@ from typing import List
 from dotenv import load_dotenv
 
 from gemini_client import GeminiClient
-from prompts import HISTORICAL_DOCUMENT_PROMPT
+import prompts
 
 logger = logging.getLogger(__name__)
 logging.getLogger("google_genai.models").setLevel(logging.WARNING)
@@ -50,7 +51,7 @@ def process_directory(
     input_dir: Path,
     output_dir: Path,
     client: GeminiClient,
-    prompt: str = HISTORICAL_DOCUMENT_PROMPT,
+    prompt: str,
     max_workers: int = MAX_WORKERS,
 ) -> None:
     """Process every supported image inside *input_dir* and write JSON to *output_dir*."""
@@ -129,6 +130,19 @@ def main() -> None:
     logging.getLogger("googleapiclient.http").setLevel(logging.WARNING)
     load_dotenv()
 
+    prompt_name = os.environ.get("PROMPT", "HISTORICAL_DOCUMENT_PROMPT")
+    prompt_text = getattr(prompts, prompt_name, None)
+
+    if prompt_text is None:
+        logger.error(
+            "Prompt '%s' not found in prompts.py. Falling back to default.",
+            prompt_name,
+        )
+        prompt_name = "HISTORICAL_DOCUMENT_PROMPT"
+        prompt_text = prompts.HISTORICAL_DOCUMENT_PROMPT
+
+    logger.info("Using prompt: '%s'", prompt_name)
+
     input_dir = Path("input_images")
     output_dir = Path("output_text")
 
@@ -142,7 +156,7 @@ def main() -> None:
         logger.error("Please ensure GEMINI_API_KEY is available as an environment variable or inside a .env file.")
         return
 
-    process_directory(input_dir, output_dir, client)
+    process_directory(input_dir, output_dir, client, prompt=prompt_text)
 
 
 if __name__ == "__main__":
