@@ -37,6 +37,12 @@ A vision language model pipeline for transcribing scanned historical documents w
 
     Results will be written to `output_text/` – one JSON file per image. If the model returns invalid JSON the raw output is stored alongside with a `_error.txt` suffix for manual inspection.
 
+## Adding/Changing Prompts
+
+All prompts are stored as Python strings inside `prompts.py`. You can add new prompts by creating new string variables in this file.
+
+To switch between prompts, set the `PROMPT` environment variable in your `.env` file to the name of the desired prompt variable (e.g., `PROMPT="YOUR_NEW_PROMPT_NAME"`). If this variable is not set, the pipeline defaults to using `HISTORICAL_DOCUMENT_PROMPT`.
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) for details.
