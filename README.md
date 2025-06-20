@@ -8,8 +8,8 @@ A vision language model pipeline for transcribing scanned historical documents w
 
 1. Clone the repository:
     ```bash
-    git clone https://github.com/ALucek/SEB-OCR.git
-    cd SEB-OCR
+    git clone https://github.com/ALucek/seb-ocr.git
+    cd seb-ocr
     ```
 
 2. Install dependencies using [uv](https://docs.astral.sh/uv/):
