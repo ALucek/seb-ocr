@@ -7,15 +7,17 @@ A vision language model pipeline for transcribing scanned historical documents w
 ## Usage
 
 1. Clone the repository:
-```bash
-git clone https://github.com/ALucek/XXX.git
-cd XXX
-```
+
+    ```bash
+    git clone https://github.com/ALucek/XXX.git
+    cd XXX
+    ```
 
 2. Install dependencies using [uv](https://docs.astral.sh/uv/):
-```bash
-uv sync
-```
+
+    ```bash
+    uv sync
+    ```
 
 2.  Add your Gemini API key to a `.env` file:
 
