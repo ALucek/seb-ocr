@@ -18,7 +18,7 @@ A vision language model pipeline for transcribing scanned historical documents w
     uv sync
     ```
 
-2.  Add your Gemini API key to a `.env` file:
+3.  Add your Gemini API key to a `.env` file:
 
     ```ini
     GEMINI_API_KEY="your-secret-key"
@@ -26,9 +26,9 @@ A vision language model pipeline for transcribing scanned historical documents w
     # GEMINI_MODEL="gemini-2.5-flash"
     ```
 
-3.  Drop images in the `input_images/` directory (created automatically on first run).
+4.  Drop images in the `input_images/` directory (created automatically on first run).
 
-4.  Run the pipeline:
+5.  Run the pipeline:
 
     ```bash
     uv run main.py
