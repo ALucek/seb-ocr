@@ -2,7 +2,7 @@
 
 <img src="./seb_ocr_logo.png" width=250>
 
-A vision language model pipeline for transcribing scanned historical documents with Google's **Gemini** models. Specifically made for political science research efforts. 
+A vision language model pipeline for transcribing scanned historical documents with Google's [Gemini](https://ai.google.dev/gemini-api/docs/models) models. 
 
 ## Usage
 
