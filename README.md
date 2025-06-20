@@ -1,6 +1,6 @@
 # seb-ocr
 
-<img src="./seb_ocr_logo.png" width=250>
+<img src="./seb_ocr_logo.png" width=600>
 
 A vision language model pipeline for transcribing scanned historical documents with Google's [Gemini](https://ai.google.dev/gemini-api/docs/models) models, built specifically for ongoing political science research.
 
