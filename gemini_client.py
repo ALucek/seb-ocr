@@ -88,11 +88,10 @@ class GeminiClient:
             raise FileNotFoundError(f"Image file not found at {image_path}")
 
         try:
-            image = PIL.Image.open(image_path)
-
-            response = self._client.models.generate_content(
-                model=self.model_name, contents=[prompt, image]
-            )
+            with PIL.Image.open(image_path) as image:
+                response = self._client.models.generate_content(
+                    model=self.model_name, contents=[prompt, image]
+                )
 
             text_response: str = response.text.strip()
             # The model sometimes wraps JSON in markdown code fences – strip them.
