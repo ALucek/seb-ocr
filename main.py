@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import re
@@ -12,6 +13,10 @@ from gemini_client import GeminiClient
 from prompts import HISTORICAL_DOCUMENT_PROMPT
 
 logger = logging.getLogger(__name__)
+logging.getLogger("google_genai.models").setLevel(logging.WARNING)
+
+# The maximum number of concurrent workers for processing images.
+MAX_WORKERS = 10
 
 
 def _extract_number_from_filename(path: Path) -> int:
@@ -46,6 +51,7 @@ def process_directory(
     output_dir: Path,
     client: GeminiClient,
     prompt: str = HISTORICAL_DOCUMENT_PROMPT,
+    max_workers: int = MAX_WORKERS,
 ) -> None:
     """Process every supported image inside *input_dir* and write JSON to *output_dir*."""
     all_images = _discover_images(input_dir)
@@ -74,19 +80,44 @@ def process_directory(
 
     logger.info("Starting OCR process for %d new images…", total_to_process)
 
-    for i, path in enumerate(images_to_process, 1):
-        logger.info("Processing image %d of %d: %s…", i, total_to_process, path.name)
-        result = process_image(path, client, prompt)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_path = {
+            executor.submit(process_image, path, client, prompt): path
+            for path in images_to_process
+        }
 
-        if isinstance(result, dict):
-            target_file = output_dir / f"{path.stem}.json"
-            with target_file.open("w") as fh:
-                json.dump(result, fh, indent=4)
-        else:
-            target_file = output_dir / f"{path.stem}_error.txt"
-            target_file.write_text(result)
+        for i, future in enumerate(concurrent.futures.as_completed(future_to_path), 1):
+            path = future_to_path[future]
+            try:
+                result = future.result()
+                logger.info(
+                    "[%d/%d] Finished processing %s.",
+                    i,
+                    total_to_process,
+                    path.name,
+                )
 
-        logger.info("Saved output to %s", target_file)
+                if isinstance(result, dict):
+                    target_file = output_dir / f"{path.stem}.json"
+                    with target_file.open("w") as fh:
+                        json.dump(result, fh, indent=4)
+                else:
+                    target_file = output_dir / f"{path.stem}_error.txt"
+                    target_file.write_text(result)
+
+                logger.info("Saved output to %s", target_file)
+
+            except Exception as exc:
+                logger.error(
+                    "[%d/%d] Processing %s generated an exception: %s",
+                    i,
+                    total_to_process,
+                    path.name,
+                    exc,
+                )
+                error_file = output_dir / f"{path.stem}_error.txt"
+                error_file.write_text(str(exc))
+                logger.info("Saved error to %s", error_file)
 
 
 def main() -> None:

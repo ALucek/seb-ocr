@@ -1,21 +1,21 @@
 # seb-ocr
 
-A minimal proof-of-concept for transcribing historical documents with Google's **Gemini** models.
+<img src="./seb_ocr_logo.png" width=250>
 
-The project purposefully keeps its codebase small and readable. The core responsibilities are split into three modules:
+A vision language model pipeline for transcribing scanned historical documents with Google's **Gemini** models. Specifically made for political science research efforts. 
 
-* `gemini_client.py` – thin wrapper around the Google GenAI SDK with sensible retry logic.
-* `prompts.py` – collection of prompt templates.
-* `pipeline.py` – orchestrates the OCR workflow (load images → call Gemini → write JSON).
-* `cli.py` – command-line entry-point.
+## Usage
 
-## Quick start
+1. Clone the repository:
+```bash
+git clone https://github.com/ALucek/XXX.git
+cd XXX
+```
 
-1.  Install the project in editable mode (which also installs the dependencies):
-
-    ```bash
-    pip install -e .
-    ```
+2. Install dependencies using [uv](https://docs.astral.sh/uv/):
+```bash
+uv sync
+```
 
 2.  Add your Gemini API key to a `.env` file:
 
@@ -30,11 +30,11 @@ The project purposefully keeps its codebase small and readable. The core respons
 4.  Run the pipeline:
 
     ```bash
-    seb-ocr
+    uv run main.py
     ```
 
     Results will be written to `output_text/` – one JSON file per image. If the model returns invalid JSON the raw output is stored alongside with a `_error.txt` suffix for manual inspection.
 
 ## License
 
-MIT © Sebastian …
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) for details.

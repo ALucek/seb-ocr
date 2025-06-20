@@ -12,3 +12,6 @@ dependencies = [
     "google-api-core>=2.25.1",
     "google-genai>=1.21.1",
 ]
+
+[project.scripts]
+seb-ocr = "main:main"
