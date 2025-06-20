@@ -102,7 +102,11 @@ class GeminiClient:
                 text_response = text_response[:-3]
 
             return text_response
+        except google_exceptions.GoogleAPIError:
+            # Propagate Google API errors so the tenacity retry decorator can
+            # handle them properly.
+            raise
         except Exception as exc:
             raise RuntimeError(
                 f"Failed to generate content with Gemini API model: {exc}"
-            ) from exc 
+            ) from exc
