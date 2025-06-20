@@ -48,15 +48,34 @@ def process_directory(
     prompt: str = HISTORICAL_DOCUMENT_PROMPT,
 ) -> None:
     """Process every supported image inside *input_dir* and write JSON to *output_dir*."""
-    images = _discover_images(input_dir)
-    if not images:
+    all_images = _discover_images(input_dir)
+    if not all_images:
         logger.warning("No images found in '%s'. Please add some images to process.", input_dir)
         return
 
-    logger.info("Starting OCR process for %d images in '%s'…", len(images), input_dir)
+    images_to_process = []
+    for path in all_images:
+        json_output = output_dir / f"{path.stem}.json"
+        error_output = output_dir / f"{path.stem}_error.txt"
+        if not (json_output.exists() or error_output.exists()):
+            images_to_process.append(path)
 
-    for path in images:
-        logger.info("Processing %s…", path.name)
+    total_found = len(all_images)
+    total_to_process = len(images_to_process)
+    total_skipped = total_found - total_to_process
+
+    logger.info("Found %d total images in '%s'.", total_found, input_dir)
+    if total_skipped > 0:
+        logger.info("Skipping %d images that have already been processed.", total_skipped)
+
+    if not images_to_process:
+        logger.info("All images have already been processed. Nothing to do.")
+        return
+
+    logger.info("Starting OCR process for %d new images…", total_to_process)
+
+    for i, path in enumerate(images_to_process, 1):
+        logger.info("Processing image %d of %d: %s…", i, total_to_process, path.name)
         result = process_image(path, client, prompt)
 
         if isinstance(result, dict):
