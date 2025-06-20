@@ -17,11 +17,6 @@ from tenacity import (
 
 __all__ = ["GeminiClient"]
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
-logging.getLogger("google_genai.models").setLevel(logging.WARNING)
-
 # Load environment variables from a .env file if present.
 load_dotenv()
 

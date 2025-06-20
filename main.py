@@ -92,6 +92,10 @@ def process_directory(
 def main() -> None:
     """Run the OCR pipeline."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    # Suppress verbose logs from Google API client libraries
+    logging.getLogger("google_genai.models").setLevel(logging.WARNING)
+    logging.getLogger("google.api_core").setLevel(logging.WARNING)
+    logging.getLogger("googleapiclient.http").setLevel(logging.WARNING)
     load_dotenv()
 
     input_dir = Path("input_images")
