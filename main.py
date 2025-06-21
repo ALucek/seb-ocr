@@ -7,7 +7,6 @@ import os
 import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, asdict
 import hashlib
 
 from dotenv import load_dotenv
@@ -23,8 +22,9 @@ CHUNK_OVERLAP_CHARS = 2000  # Character overlap between chunks
 MAX_CHUNK_SIZE = 40000     # Target chunk size in characters
 
 
-@dataclass
-class TranscriptionResult:
+# Pydantic models for structured output from Gemini
+
+class TranscriptionResult(BaseModel):
     """Result from Phase 1 transcription."""
     page_number: int
     filename: str
@@ -32,22 +32,18 @@ class TranscriptionResult:
     confidence: str
     issues: List[str]
 
-
-@dataclass
-class ExtractedEntry:
+class ExtractedEntry(BaseModel):
     """Individual entry extracted in Phase 2."""
     entry_id: str
-    individual: str  # Now required
+    individual: str
     title_or_position: Optional[str]
     location: Optional[str]
     full_identifier: str
     text: str
     source_chunk: int
     confidence_score: float
-    text_hash: str  # For deduplication
+    text_hash: str
 
-
-# Pydantic models for structured output from Gemini
 class TranscriptionModel(BaseModel):
     """Pydantic model for transcription output."""
     transcribed_text: str = Field(description="Complete text transcription as a single flowing text block")
@@ -94,7 +90,7 @@ class TwoPhaseProcessor:
         """Phase 1: Pure transcription of all pages."""
         logger.info("=== PHASE 1: TRANSCRIPTION ===")
         
-        transcription_dir = output_dir / "phase1_transcriptions"
+        transcription_dir = output_dir / "page_transcriptions"
         transcription_dir.mkdir(exist_ok=True)
         
         all_images = self._discover_images(input_dir)
@@ -126,14 +122,15 @@ class TwoPhaseProcessor:
                 path = future_to_path[future]
                 try:
                     result = future.result()
-                    self.transcription_results.append(result)
-                    
-                    # Save individual transcription
-                    output_file = transcription_dir / f"{path.stem}.json"
-                    with output_file.open("w") as f:
-                        json.dump(asdict(result), f, indent=2)
-                    
-                    logger.info("[%d/%d] Transcribed %s", i, len(images_to_process), path.name)
+                    if result:
+                        self.transcription_results.append(result)
+                        
+                        # Save individual transcription
+                        output_file = transcription_dir / f"{path.stem}.json"
+                        with output_file.open("w") as f:
+                            json.dump(result.model_dump(), f, indent=2)
+                        
+                        logger.info("[%d/%d] Transcribed %s", i, len(images_to_process), path.name)
                     
                 except Exception as exc:
                     logger.error("Error transcribing %s: %r", path.name, exc)
@@ -170,13 +167,8 @@ class TwoPhaseProcessor:
             )
             
         except Exception as exc:
-            return TranscriptionResult(
-                page_number=page_number,
-                filename=image_path.name,
-                transcribed_text="",
-                confidence="failed",
-                issues=[f"Transcription failed: {str(exc)}"]
-            )
+            logger.error("Error during transcription for %s: %s", image_path.name, exc)
+            return None
     
     def _phase2_entity_extraction(self, output_dir: Path):
         """Phase 2: Extract entities from complete transcribed text."""
@@ -210,9 +202,9 @@ class TwoPhaseProcessor:
                 logger.error("Error processing chunk %d: %r", i, exc)
         
         # Store raw extractions
-        raw_output = output_dir / "phase2_raw_extractions.json"
-        with raw_output.open("w") as f:
-            json.dump([asdict(entry) for entry in all_extractions], f, indent=2)
+        # raw_output = output_dir / "phase2_raw_extractions.json"
+        # with raw_output.open("w") as f:
+        #     json.dump([entry.model_dump() for entry in all_extractions], f, indent=2)
         
         self.extracted_entries = all_extractions
         logger.info("Phase 2 complete. Extracted %d raw entries.", len(all_extractions))
@@ -231,16 +223,23 @@ class TwoPhaseProcessor:
         # Flag low-confidence entries
         flagged_entries = [entry for entry in deduplicated if entry.confidence_score < 0.7]
         
-        # Create final output
-        final_output = {
+        # --- Create final outputs ---
+
+        # 1. Main extracted entities
+        final_entries_file = output_dir / "extracted_entries.json"
+        with final_entries_file.open("w") as f:
+            json.dump([entry.model_dump() for entry in deduplicated], f, indent=2)
+        logger.info("Saved %d deduplicated entries to %s", len(deduplicated), final_entries_file)
+
+        # 2. Metadata file
+        metadata_output = {
             "processing_metadata": {
                 "total_pages_processed": len(self.transcription_results),
                 "total_entries_extracted": len(deduplicated),
                 "entries_flagged_for_review": len(flagged_entries),
                 "processing_date": None  # Could add timestamp
             },
-            "entries": [asdict(entry) for entry in deduplicated],
-            "flagged_entries": [asdict(entry) for entry in flagged_entries],
+            "flagged_entries": [entry.model_dump() for entry in flagged_entries],
             "transcription_summary": {
                 "pages_with_issues": [
                     {"page": r.page_number, "filename": r.filename, "issues": r.issues}
@@ -248,19 +247,18 @@ class TwoPhaseProcessor:
                 ]
             }
         }
+        metadata_file = output_dir / "processing_metadata.json"
+        with metadata_file.open("w") as f:
+            json.dump(metadata_output, f, indent=2)
+        logger.info("Saved processing metadata to %s", metadata_file)
         
-        # Save final results
-        final_output_file = output_dir / "final_extracted_entries.json"
-        with final_output_file.open("w") as f:
-            json.dump(final_output, f, indent=2)
-        
-        # Save full transcription for reference
+        # 3. Full transcription for reference
         full_transcription_file = output_dir / "complete_transcription.txt"
         with full_transcription_file.open("w") as f:
             f.write(self._combine_transcriptions())
+        logger.info("Saved complete transcription to %s", full_transcription_file)
         
-        logger.info("Phase 3 complete. Final output saved to %s", final_output_file)
-        logger.info("Summary: %d entries extracted, %d flagged for review", 
+        logger.info("Phase 3 complete. Summary: %d entries extracted, %d flagged for review", 
                    len(deduplicated), len(flagged_entries))
     
     def _combine_transcriptions(self) -> str:
@@ -382,7 +380,12 @@ class TwoPhaseProcessor:
     
     def _load_existing_transcriptions(self, transcription_dir: Path, all_images: List[Path]):
         """Load existing transcription results."""
+        existing_filenames = {r.filename for r in self.transcription_results}
+
         for image_path in all_images:
+            if image_path.name in existing_filenames:
+                continue
+
             transcription_file = transcription_dir / f"{image_path.stem}.json"
             if transcription_file.exists():
                 try:

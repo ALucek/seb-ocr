@@ -141,11 +141,7 @@ class GeminiClient:
         before_sleep=_log_retry_attempt,
     )
     def generate_text_only(self, prompt: str, response_schema: Optional[Any] = None) -> Union[str, Any]:
-        """Generate text from a text-only prompt via Gemini.
-
-        This method is used for text-to-text tasks like entity extraction
-        from already transcribed content.
-        """
+        """Generate text from a text-only prompt via Gemini."""
         config = {}
         if response_schema:
             config["response_mime_type"] = "application/json"
