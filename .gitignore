@@ -12,3 +12,4 @@ wheels/
 /output_text
 
 .env
+.DS_Store
