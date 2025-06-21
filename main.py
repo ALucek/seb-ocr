@@ -28,12 +28,12 @@ from schemas import DetectedEntity, EntityFromLLM, LLMResponse
 logger = logging.getLogger(__name__)
 logging.getLogger("google_genai.models").setLevel(logging.WARNING)
 
-# The maximum number of concurrent workers for processing images.
-MAX_WORKERS = 10
+# The maximum number of concurrent workers for processing images, configurable via environment variable.
+MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "10"))
 
-# Configuration for the sliding window entity extraction.
-WINDOW_SIZE = 5  # Number of pages to include in each window.
-WINDOW_STEP = 2  # Number of pages to slide the window forward.
+# Configuration for the sliding window entity extraction, configurable via environment variables.
+WINDOW_SIZE = int(os.environ.get("WINDOW_SIZE", "5"))
+WINDOW_STEP = int(os.environ.get("WINDOW_STEP", "2"))
 
 
 class ExtractedEntities(BaseModel):
@@ -438,19 +438,6 @@ def main() -> None:
 
     logger.info("Running in '%s' mode.", args.mode)
 
-    prompt_name = os.environ.get("PROMPT", "TRANSCRIPTION_PROMPT")
-    prompt_text = getattr(prompts, prompt_name, None)
-
-    if prompt_text is None:
-        logger.error(
-            "Prompt '%s' not found in prompts.py. Falling back to default.",
-            prompt_name,
-        )
-        prompt_name = "TRANSCRIPTION_PROMPT"
-        prompt_text = prompts.TRANSCRIPTION_PROMPT
-
-    logger.info("Using prompt: '%s'", prompt_name)
-
     input_dir = Path("input_images")
     output_dir = Path("output")
     transcription_dir = output_dir / "transcriptions"
@@ -471,16 +458,18 @@ def main() -> None:
     if args.mode in ["transcribe", "all"]:
         # Stage 1: Transcribe images to text.
         logger.info("--- Starting Transcription Stage ---")
+        logger.info("Using prompt: 'TRANSCRIPTION_PROMPT'")
         process_directory(
             input_dir,
             transcription_dir,
             client,
-            prompt=prompt_text,
+            prompt=prompts.TRANSCRIPTION_PROMPT,
         )
 
     if args.mode in ["extract", "all"]:
         # Stage 2: Extract structured entities from transcriptions.
         logger.info("--- Starting Entity Extraction Stage ---")
+        logger.info("Using prompt: 'ENTITY_EXTRACTION_PROMPT'")
         run_entity_extraction(
             input_dir=transcription_dir,
             output_dir=final_output_dir,

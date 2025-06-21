@@ -37,29 +37,24 @@ def _log_retry_attempt(retry_state):
 class GeminiClient:
     """A small convenience wrapper around the google-genai client."""
 
-    def __init__(self, api_key: Optional[str] | None = None, model: Optional[str] | None = None):
+    def __init__(self):
         """Create a new :class:`GeminiClient` instance.
 
-        Parameters
-        ----------
-        api_key
-            The Gemini API key. If *None* the value is taken from the
-            ``GEMINI_API_KEY`` environment variable.
-        model
-            Name of the generative model to use. If *None* the value is taken
-            from the ``GEMINI_MODEL`` environment variable, defaulting to
-            ``"gemini-2.5-flash"``.
+        Configuration is handled via environment variables:
+        - ``GEMINI_API_KEY``: The Gemini API key.
+        - ``GEMINI_MODEL``: Name of the generative model to use (defaults to "gemini-2.5-flash").
+        - ``GEMINI_EMBEDDING_MODEL``: Name of the embedding model to use (defaults to "text-embedding-004").
         """
 
         default_model = "gemini-2.5-flash"
-        self.model_name = model or os.environ.get("GEMINI_MODEL", default_model)
+        self.model_name = os.environ.get("GEMINI_MODEL", default_model)
 
         default_embedding_model = "text-embedding-004"
         self.embedding_model_name = os.environ.get(
             "GEMINI_EMBEDDING_MODEL", default_embedding_model
         )
 
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        self.api_key = os.environ.get("GEMINI_API_KEY")
         if not self.api_key:
             raise ValueError(
                 "API key must be provided or set via GEMINI_API_KEY environment variable."
