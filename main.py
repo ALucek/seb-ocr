@@ -168,6 +168,25 @@ def process_directory(
                 )
 
 
+def _log_window_retry_attempt(retry_state):
+    """Log information before we sleep between retry attempts for window processing."""
+    # The first argument to _process_window is window_files
+    window_files = retry_state.args[0]
+    window_page_numbers = [_extract_number_from_filename(p) for p in window_files]
+    logging.warning(
+        "Retrying entity extraction for window %s due to error: %s. Attempt #%d, waiting %.2fs...",
+        window_page_numbers,
+        retry_state.outcome.exception(),
+        retry_state.attempt_number,
+        retry_state.next_action.sleep,
+    )
+
+
+@retry(
+    wait=wait_exponential(multiplier=1, min=4, max=60),
+    stop=stop_after_attempt(3),
+    before_sleep=_log_window_retry_attempt,
+)
 def _process_window(
     window_files: List[Path],
     client: GeminiClient,
@@ -221,20 +240,23 @@ def run_entity_extraction(
     structured entities, deduplicates the results, and saves them to a
     JSON file.
     """
+    window_output_dir = input_dir / "window_outputs"
+    window_output_dir.mkdir(exist_ok=True)
+
     transcriptions = _discover_transcriptions(input_dir)
     if not transcriptions:
         logger.info("No transcriptions found in '%s' to extract entities from.", input_dir)
         return
 
     # Generate all unique windows of transcription files to be processed.
-    windows_to_process: list[list[Path]] = []
+    all_windows: list[list[Path]] = []
     processed_keys = set()
 
     for i in range(0, len(transcriptions) - WINDOW_SIZE + 1, WINDOW_STEP):
         window_files = transcriptions[i : i + WINDOW_SIZE]
         key = tuple(p.name for p in window_files)
         if key not in processed_keys:
-            windows_to_process.append(window_files)
+            all_windows.append(window_files)
             processed_keys.add(key)
 
     # Ensure the final window is always included if it was missed.
@@ -242,46 +264,92 @@ def run_entity_extraction(
         final_window_files = transcriptions[-WINDOW_SIZE:]
         key = tuple(p.name for p in final_window_files)
         if key not in processed_keys:
-            windows_to_process.append(final_window_files)
+            all_windows.append(final_window_files)
             processed_keys.add(key)
 
-    if not windows_to_process:
-        logger.info("No windows to process.")
-        return
-
-    logger.info(
-        "Found %d transcriptions. Starting entity extraction for %d windows with window size %d and step %d.",
-        len(transcriptions),
-        len(windows_to_process),
-        WINDOW_SIZE,
-        WINDOW_STEP,
-    )
-
     all_entities: List[DetectedEntity] = []
+    windows_to_process: list[list[Path]] = []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_window = {
-            executor.submit(_process_window, window, client, prompt_template): window
-            for window in windows_to_process
-        }
+    for window in all_windows:
+        window_page_numbers = sorted([_extract_number_from_filename(p) for p in window])
+        window_key = f"window_{window_page_numbers[0]}_{window_page_numbers[-1]}.json"
+        output_path = window_output_dir / window_key
 
-        for i, future in enumerate(
-            concurrent.futures.as_completed(future_to_window), 1
-        ):
-            window = future_to_window[future]
+        if output_path.exists():
             try:
-                entities_from_window = future.result()
-                if entities_from_window:
-                    all_entities.extend(entities_from_window)
-            except Exception as exc:
-                window_key = tuple(_extract_number_from_filename(p) for p in window)
-                logger.error(
-                    "[%d/%d] Window %s generated an unexpected exception: %s",
-                    i,
-                    len(windows_to_process),
-                    list(window_key),
-                    exc,
+                logger.info("Loading cached entities from %s", output_path)
+                content = output_path.read_text()
+                if content:
+                    data = json.loads(content)
+                    # Note: Using model_validate to handle Pydantic v2 validation
+                    loaded_entities = ExtractedEntities.model_validate(data).entities
+                    all_entities.extend(loaded_entities)
+                else:
+                    logger.info("Cache file %s is empty, will re-process.", output_path)
+                    windows_to_process.append(window)
+            except (json.JSONDecodeError, Exception) as e:
+                logger.warning(
+                    "Could not load or parse cached file %s, will re-process. Error: %s",
+                    output_path,
+                    e,
                 )
+                windows_to_process.append(window)
+        else:
+            windows_to_process.append(window)
+
+    if not windows_to_process:
+        logger.info("All windows have been processed and loaded from cache.")
+    else:
+        logger.info(
+            "Found %d transcriptions. Starting entity extraction for %d new windows with window size %d and step %d.",
+            len(transcriptions),
+            len(windows_to_process),
+            WINDOW_SIZE,
+            WINDOW_STEP,
+        )
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_window = {
+                executor.submit(_process_window, window, client, prompt_template): window
+                for window in windows_to_process
+            }
+
+            for i, future in enumerate(
+                concurrent.futures.as_completed(future_to_window), 1
+            ):
+                window = future_to_window[future]
+                window_page_numbers = sorted(
+                    [_extract_number_from_filename(p) for p in window]
+                )
+                try:
+                    entities_from_window = future.result()
+                    if entities_from_window:
+                        all_entities.extend(entities_from_window)
+
+                    # Save the result of the window processing (even if empty) to mark it as processed.
+                    window_key = f"window_{window_page_numbers[0]}_{window_page_numbers[-1]}.json"
+                    output_path = window_output_dir / window_key
+                    output_data = ExtractedEntities(entities=entities_from_window)
+                    output_path.write_text(output_data.model_dump_json(indent=2))
+                    logger.info(
+                        "Saved intermediate entities for window %s to %s",
+                        window_page_numbers,
+                        output_path,
+                    )
+
+                except Exception as exc:
+                    logger.error(
+                        "[%d/%d] Window %s generated an unexpected exception: %s",
+                        i,
+                        len(windows_to_process),
+                        list(window_page_numbers),
+                        exc,
+                    )
+
+    # The rest of the function continues with deduplication and final saving...
+    if not all_entities:
+        logger.info("No entities were extracted from any window. Nothing more to do.")
+        return
 
     # Deduplicate entities based on their `full_identifier`. When duplicates
     # are found, the entity from a later page (the last one seen) is kept,
