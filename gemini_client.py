@@ -2,7 +2,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, Any
 
 import PIL.Image
 from dotenv import load_dotenv
@@ -61,7 +61,7 @@ class GeminiClient:
         self._client = genai.Client(api_key=self.api_key)
         logging.info("Using Gemini model: %s", self.model_name)
 
-    # Main generate method
+    # Main generate method for images
 
     @retry(
         retry=retry_if_exception_type(
@@ -76,7 +76,7 @@ class GeminiClient:
         stop=stop_after_attempt(5),
         before_sleep=_log_retry_attempt,
     )
-    def generate(self, prompt: str, image_path: Union[str, Path]) -> str:
+    def generate(self, prompt: str, image_path: Union[str, Path], response_schema: Optional[Any] = None) -> Union[str, Any]:
         """Generate structured text from an image & prompt via Gemini.
 
         The method always returns the *raw* text returned by the model. The
@@ -87,11 +87,26 @@ class GeminiClient:
         if not image_path.is_file():
             raise FileNotFoundError(f"Image file not found at {image_path}")
 
+        config = {}
+        if response_schema:
+            config["response_mime_type"] = "application/json"
+            config["response_schema"] = response_schema
+
         try:
             with PIL.Image.open(image_path) as image:
-                response = self._client.models.generate_content(
-                    model=self.model_name, contents=[prompt, image]
-                )
+                call_args = {
+                    "model": self.model_name, 
+                    "contents": [prompt, image]
+                }
+                if config:
+                    call_args["config"] = config
+
+                response = self._client.models.generate_content(**call_args)
+
+            if response_schema:
+                if not hasattr(response, 'parsed') or response.parsed is None:
+                    raise RuntimeError(f"Failed to parse structured response. Raw text: {response.text}")
+                return response.parsed
 
             text_response: str = response.text.strip()
             # The model sometimes wraps JSON in markdown code fences – strip them.
@@ -107,5 +122,63 @@ class GeminiClient:
             raise
         except Exception as exc:
             raise RuntimeError(
-                f"Failed to generate content with Gemini API model: {exc}"
+                f"Failed to generate content with Gemini API model: {exc!r}"
+            ) from exc
+
+    # Text-only generation method
+
+    @retry(
+        retry=retry_if_exception_type(
+            (
+                google_exceptions.ResourceExhausted,
+                google_exceptions.ServiceUnavailable,
+                google_exceptions.InternalServerError,
+                google_exceptions.GatewayTimeout,
+            )
+        ),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        stop=stop_after_attempt(5),
+        before_sleep=_log_retry_attempt,
+    )
+    def generate_text_only(self, prompt: str, response_schema: Optional[Any] = None) -> Union[str, Any]:
+        """Generate text from a text-only prompt via Gemini.
+
+        This method is used for text-to-text tasks like entity extraction
+        from already transcribed content.
+        """
+        config = {}
+        if response_schema:
+            config["response_mime_type"] = "application/json"
+            config["response_schema"] = response_schema
+
+        try:
+            call_args = {
+                "model": self.model_name, 
+                "contents": [prompt]
+            }
+            if config:
+                call_args["config"] = config
+            
+            response = self._client.models.generate_content(**call_args)
+
+            if response_schema:
+                if not hasattr(response, 'parsed') or response.parsed is None:
+                    raise RuntimeError(f"Failed to parse structured response. Raw text: {response.text}")
+                return response.parsed
+
+            text_response: str = response.text.strip()
+            # The model sometimes wraps JSON in markdown code fences – strip them.
+            if text_response.startswith("```json"):
+                text_response = text_response[7:]
+            if text_response.endswith("```"):
+                text_response = text_response[:-3]
+
+            return text_response
+        except google_exceptions.GoogleAPIError:
+            # Propagate Google API errors so the tenacity retry decorator can
+            # handle them properly.
+            raise
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to generate text-only content with Gemini API model: {exc!r}"
             ) from exc

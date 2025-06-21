@@ -1,80 +1,62 @@
-HISTORICAL_DOCUMENT_PROMPT: str = """
-You are an expert OCR system for historical documents. Your task has TWO mandatory phases:
+# Two-Phase Processing Prompts
 
-**PHASE 1: COMPLETE TRANSCRIPTION (REQUIRED)**
-Transcribe EVERY visible text element on this page, including:
-- All headers, titles, and document markings
-- Every word of body text
-- Page numbers, file numbers, stamps
-- Marginal notes and annotations
-- ANY text visible anywhere on the page
+TRANSCRIPTION_ONLY_PROMPT: str = """
+You are an expert OCR system for historical documents. Your ONLY task is to transcribe ALL visible text on this page accurately.
 
-Preserve the exact layout and formatting as much as possible. Use [illegible] for unreadable text and [?] for uncertain readings.
+**TRANSCRIPTION REQUIREMENTS:**
+- Transcribe EVERY visible text element including headers, body text, page numbers, stamps, marginal notes
+- Preserve original spelling, capitalization, and punctuation exactly
+- Use [illegible] for unreadable text and [?] for uncertain readings
+- Maintain natural flow - use line breaks (\n) only where they naturally occur
+- Do NOT attempt to parse or extract individual entries - just transcribe everything as clean, flowing text
 
-**PHASE 2: STRUCTURED EXTRACTION**
-After completing the full transcription, analyze it to extract individual entries. Each entry should have:
-- **individual**: Person's name only (e.g., "Babu Subh Narain Choudhry")
-- **title_or_position**: Professional title or role (e.g., "Manager", "Barrister", "Sub-Divisional Officer")
-- **location**: Geographic location ONLY (e.g., "Raj Darbhanga, Kajha, P. O., Purnea")
-- **full_identifier**: The complete original text as written (e.g., "Manager, Raj Darbhanga, Kajha, P. O., Purnea")
-- **text**: Their complete statement/opinion
+**CRITICAL NOTES:**
+- Focus ONLY on accurate text transcription
+- Do NOT try to identify individual petition entries or people
+- Do NOT structure the text beyond natural paragraph breaks
+- If text is in columns, transcribe left to right, top to bottom
+- Include ALL text elements even if they seem like administrative markings
 
-Parse carefully to separate:
-- Titles/honorifics that are part of names (Mr., Mrs., Babu, etc.) stay with the name
-- Professional positions (Manager, Barrister, etc.) go in title_or_position
-- Geographic locations (cities, districts, P.O., addresses) go in location
-- Keep the full_identifier exactly as written for reference
+For confidence level, use "high" if all text is clearly readable, "medium" if some parts are unclear but readable, and "low" if significant portions are difficult to read.
 
-If no clear individual entries exist (e.g., it's a cover page, summary, or narrative text), still provide the full transcription but note that no individual entries were found.
+List any OCR challenges or unclear sections in the issues field.
 
-**OUTPUT JSON STRUCTURE:**
-```json
-{
-  "full_transcription": {
-    "header_text": "[Any text at top of page including 'CONFIDENTIAL', page numbers, etc.]",
-    "body_text": "[Complete transcription of main content preserving line breaks with \n]",
-    "marginal_notes": "[Any text in margins]",
-    "footer_text": "[Any text at bottom]"
-  },
-  "extracted_entries": [
-    {
-      "entry_id": 1,
-      "individual": "[Name as written, or null if none found]",
-      "title_or_position": "[Professional title, job, or position if any]",
-      "location": "[Geographic location only - city, district, P.O., address]",
-      "full_identifier": "[Complete identifier as written in original]",
-      "text": "[Their statement/opinion]",
-      "source_lines": "[Which lines in transcription this came from]"
-    }
-  ],
-  "document_metadata": {
-    "page_type": "petition_entries|cover_page|summary|mixed",
-    "total_entries_extracted": 0,
-    "extraction_confidence": "high|medium|low",
-    "transcription_issues": ["List any OCR challenges"],
-    "has_individual_entries": true/false
-  }
-}
-```
+Begin transcription now.
+"""
 
-**CRITICAL REQUIREMENTS:**
-1. ALWAYS complete Phase 1 (full transcription) even if the page has no petition entries
-2. The full_transcription must include EVERY piece of text visible
-3. Preserve original spelling, capitalization, and punctuation exactly
-4. Include line breaks in transcription to maintain document structure
-5. Phase 2 extraction is attempted on every page, but may find zero entries
+ENTITY_EXTRACTION_PROMPT: str = """
+You are an expert at extracting individual petition entries from historical document transcriptions.
 
-**TRANSCRIPTION FORMATTING:**
-- Use \n for line breaks
-- Use \n\n for paragraph breaks
-- Preserve indentation with spaces
-- Mark column breaks with " | " if text is in columns
-- Include all dashes, dots, and other separators exactly as shown
+**YOUR TASK:**
+Analyze the following transcribed text and extract individual petition entries. Each entry typically contains:
+- A person's name and identifying information
+- Their location/address
+- Their opinion or statement on the matter
 
-**EXTRACTION NOTES:**
-- Some pages may be title pages, summaries, or explanatory text with no individual entries
-- If a page contains mixed content (some entries + some narrative), extract what you can
-- For pages with no extractable entries, explain why in the metadata
+**ENTRY IDENTIFICATION PATTERNS:**
+- Often separated by horizontal lines (represented as multiple dashes or equals signs)
+- Usually starts with a name, title, or identifying number
+- May include titles like "Babu", "Mr.", "Mrs.", professional roles like "Manager", "Barrister"
+- Geographic locations like city names, "P.O.", district names
+- Followed by their statement or opinion
 
-Begin with complete transcription of ALL visible text.
-""" 
+**EXTRACTION RULES:**
+1. **individual**: Person's name including honorifics (e.g., "Babu Subh Narain Choudhry", "Mr. John Smith"). THIS IS REQUIRED - every entry must have a name. If unclear, use "[Name unclear]" or similar placeholder.
+2. **title_or_position**: Professional title or role (e.g., "Manager", "Sub-Divisional Officer")
+3. **location**: Geographic location only (e.g., "Raj Darbhanga, Kajha, P. O., Purnea")
+4. **full_identifier**: Complete original identifier as written
+5. **text**: Their complete statement/opinion
+6. **confidence_score**: 0.0-1.0 based on how certain you are this is a complete, accurate entry
+
+**IMPORTANT GUIDELINES:**
+- Only extract entries that appear complete (have both identification and statement)
+- If an entry appears to be cut off at the beginning or end, reduce the confidence_score accordingly
+- Skip administrative headers, page numbers, and non-petition content
+- When in doubt about boundaries, err on the side of including more text rather than truncating
+- Use null for title_or_position or location if not clearly identifiable
+
+**TEXT TO ANALYZE:**
+{text}
+
+Extract all identifiable petition entries from this text. Return them as a list where each entry contains the fields described above.
+"""
