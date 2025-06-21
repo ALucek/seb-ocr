@@ -8,6 +8,7 @@ import re
 import argparse
 from pathlib import Path
 from typing import List, Optional, Type, Union
+import csv
 
 from dotenv import load_dotenv
 from tenacity import (
@@ -39,6 +40,31 @@ class ExtractedEntities(BaseModel):
     """A container for the final list of extracted entities."""
 
     entities: List[DetectedEntity]
+
+
+def _save_entities_to_csv(entities: List[DetectedEntity], output_path: Path) -> None:
+    """Save a list of entities to a CSV file."""
+    if not entities:
+        return
+
+    # Ensure consistent field order
+    fieldnames = [
+        "individual",
+        "title_or_position",
+        "location",
+        "full_identifier",
+        "text",
+        "page_numbers",
+    ]
+
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for entity in entities:
+            row = entity.model_dump()
+            # Convert list of page numbers to a comma-separated string
+            row["page_numbers"] = ", ".join(map(str, sorted(entity.page_numbers)))
+            writer.writerow(row)
 
 
 def _log_retry_attempt(retry_state):
@@ -228,6 +254,7 @@ def _process_window(
 
 def run_entity_extraction(
     input_dir: Path,
+    output_dir: Path,
     client: GeminiClient,
     prompt_template: str,
     max_workers: int = MAX_WORKERS,
@@ -240,7 +267,7 @@ def run_entity_extraction(
     structured entities, deduplicates the results, and saves them to a
     JSON file.
     """
-    window_output_dir = input_dir / "window_outputs"
+    window_output_dir = input_dir.parent / "window_outputs"
     window_output_dir.mkdir(exist_ok=True)
 
     transcriptions = _discover_transcriptions(input_dir)
@@ -377,11 +404,15 @@ def run_entity_extraction(
     final_entities.sort(key=lambda e: min(e.page_numbers))
 
     # Save the final list of entities to a JSON file.
-    output_path = Path("output/entities.json")
+    json_output_path = output_dir / "entities.json"
     output_data = ExtractedEntities(entities=final_entities)
-    output_path.write_text(output_data.model_dump_json(indent=2))
+    json_output_path.write_text(output_data.model_dump_json(indent=2))
+    logger.info("Saved %d unique entities to %s", len(final_entities), json_output_path)
 
-    logger.info("Saved %d unique entities to %s", len(final_entities), output_path)
+    # Save the final list of entities to a CSV file.
+    csv_output_path = output_dir / "entities.csv"
+    _save_entities_to_csv(final_entities, csv_output_path)
+    logger.info("Saved %d unique entities to %s", len(final_entities), csv_output_path)
 
 
 def main() -> None:
@@ -422,9 +453,13 @@ def main() -> None:
 
     input_dir = Path("input_images")
     output_dir = Path("output")
+    transcription_dir = output_dir / "transcriptions"
+    final_output_dir = output_dir / "final_outputs"
 
     input_dir.mkdir(exist_ok=True)
     output_dir.mkdir(exist_ok=True)
+    transcription_dir.mkdir(exist_ok=True)
+    final_output_dir.mkdir(exist_ok=True)
 
     try:
         client = GeminiClient()
@@ -438,7 +473,7 @@ def main() -> None:
         logger.info("--- Starting Transcription Stage ---")
         process_directory(
             input_dir,
-            output_dir,
+            transcription_dir,
             client,
             prompt=prompt_text,
         )
@@ -447,7 +482,8 @@ def main() -> None:
         # Stage 2: Extract structured entities from transcriptions.
         logger.info("--- Starting Entity Extraction Stage ---")
         run_entity_extraction(
-            input_dir=output_dir,
+            input_dir=transcription_dir,
+            output_dir=final_output_dir,
             client=client,
             prompt_template=prompts.ENTITY_EXTRACTION_PROMPT,
             max_workers=MAX_WORKERS,
