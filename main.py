@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import argparse
 from pathlib import Path
 from typing import List, Optional, Type, Union
 
@@ -30,7 +31,7 @@ logging.getLogger("google_genai.models").setLevel(logging.WARNING)
 MAX_WORKERS = 10
 
 # Configuration for the sliding window entity extraction.
-WINDOW_SIZE = 3  # Number of pages to include in each window.
+WINDOW_SIZE = 5  # Number of pages to include in each window.
 WINDOW_STEP = 1  # Number of pages to slide the window forward.
 
 
@@ -262,12 +263,26 @@ def run_entity_extraction(
 
 def main() -> None:
     """Run the OCR pipeline."""
+    parser = argparse.ArgumentParser(description="Run the OCR pipeline.")
+    parser.add_argument(
+        "mode",
+        nargs="?",
+        choices=["transcribe", "extract", "all"],
+        default="all",
+        help="The mode to run: 'transcribe' for image transcription, "
+        "'extract' for entity extraction from transcriptions, "
+        "or 'all' to run both stages. Defaults to 'all'.",
+    )
+    args = parser.parse_args()
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     # Suppress verbose logs from Google API client libraries
     logging.getLogger("google_genai.models").setLevel(logging.WARNING)
     logging.getLogger("google.api_core").setLevel(logging.WARNING)
     logging.getLogger("googleapiclient.http").setLevel(logging.WARNING)
     load_dotenv()
+
+    logger.info("Running in '%s' mode.", args.mode)
 
     prompt_name = os.environ.get("PROMPT", "TRANSCRIPTION_PROMPT")
     prompt_text = getattr(prompts, prompt_name, None)
@@ -295,21 +310,24 @@ def main() -> None:
         logger.error("Please ensure GEMINI_API_KEY is available as an environment variable or inside a .env file.")
         return
 
-    # Stage 1: Transcribe images to text.
-    process_directory(
-        input_dir,
-        output_dir,
-        client,
-        prompt=prompt_text,
-    )
+    if args.mode in ["transcribe", "all"]:
+        # Stage 1: Transcribe images to text.
+        logger.info("--- Starting Transcription Stage ---")
+        process_directory(
+            input_dir,
+            output_dir,
+            client,
+            prompt=prompt_text,
+        )
 
-    # Stage 2: Extract structured entities from transcriptions.
-    logger.info("--- Starting Entity Extraction Stage ---")
-    run_entity_extraction(
-        input_dir=output_dir,
-        client=client,
-        prompt_template=prompts.ENTITY_EXTRACTION_PROMPT,
-    )
+    if args.mode in ["extract", "all"]:
+        # Stage 2: Extract structured entities from transcriptions.
+        logger.info("--- Starting Entity Extraction Stage ---")
+        run_entity_extraction(
+            input_dir=output_dir,
+            client=client,
+            prompt_template=prompts.ENTITY_EXTRACTION_PROMPT,
+        )
 
 
 if __name__ == "__main__":
