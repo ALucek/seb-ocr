@@ -54,7 +54,7 @@ class GeminiClient:
         default_model = "gemini-2.5-flash"
         self.model_name = model or os.environ.get("GEMINI_MODEL", default_model)
 
-        default_embedding_model = "gemini-embedding-exp-03-07"
+        default_embedding_model = "text-embedding-004"
         self.embedding_model_name = os.environ.get(
             "GEMINI_EMBEDDING_MODEL", default_embedding_model
         )

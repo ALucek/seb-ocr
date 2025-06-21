@@ -32,7 +32,7 @@ MAX_WORKERS = 10
 
 # Configuration for the sliding window entity extraction.
 WINDOW_SIZE = 5  # Number of pages to include in each window.
-WINDOW_STEP = 1  # Number of pages to slide the window forward.
+WINDOW_STEP = 2  # Number of pages to slide the window forward.
 
 
 class ExtractedEntities(BaseModel):
@@ -168,8 +168,50 @@ def process_directory(
                 )
 
 
+def _process_window(
+    window_files: List[Path],
+    client: GeminiClient,
+    prompt_template: str,
+) -> List[DetectedEntity]:
+    """Processes a single window of transcriptions to extract entities."""
+    window_page_numbers = [_extract_number_from_filename(p) for p in window_files]
+    window_text = "\n\n---\n\n".join(p.read_text() for p in window_files)
+
+    try:
+        response_data = client.generate_structured_from_text(
+            prompt_template=prompt_template,
+            text_input=window_text,
+            response_schema=LLMResponse,
+        )
+
+        if not response_data or not response_data.entities:
+            logger.info("No entities found in window %s.", window_page_numbers)
+            return []
+
+        entities = [
+            DetectedEntity(**item.model_dump(), page_numbers=window_page_numbers)
+            for item in response_data.entities
+        ]
+
+        logger.info(
+            "Extracted %d entities from window %s.",
+            len(entities),
+            window_page_numbers,
+        )
+        return entities
+
+    except Exception as exc:
+        logger.error(
+            "Failed to extract entities from window %s: %s", window_page_numbers, exc
+        )
+        return []
+
+
 def run_entity_extraction(
-    input_dir: Path, client: GeminiClient, prompt_template: str
+    input_dir: Path,
+    client: GeminiClient,
+    prompt_template: str,
+    max_workers: int = MAX_WORKERS,
 ) -> None:
     """
     Run entity extraction on transcribed text files using a sliding window.
@@ -184,52 +226,62 @@ def run_entity_extraction(
         logger.info("No transcriptions found in '%s' to extract entities from.", input_dir)
         return
 
+    # Generate all unique windows of transcription files to be processed.
+    windows_to_process: list[list[Path]] = []
+    processed_keys = set()
+
+    for i in range(0, len(transcriptions) - WINDOW_SIZE + 1, WINDOW_STEP):
+        window_files = transcriptions[i : i + WINDOW_SIZE]
+        key = tuple(p.name for p in window_files)
+        if key not in processed_keys:
+            windows_to_process.append(window_files)
+            processed_keys.add(key)
+
+    # Ensure the final window is always included if it was missed.
+    if len(transcriptions) >= WINDOW_SIZE:
+        final_window_files = transcriptions[-WINDOW_SIZE:]
+        key = tuple(p.name for p in final_window_files)
+        if key not in processed_keys:
+            windows_to_process.append(final_window_files)
+            processed_keys.add(key)
+
+    if not windows_to_process:
+        logger.info("No windows to process.")
+        return
+
     logger.info(
-        "Found %d transcriptions. Starting entity extraction with window size %d and step %d.",
+        "Found %d transcriptions. Starting entity extraction for %d windows with window size %d and step %d.",
         len(transcriptions),
+        len(windows_to_process),
         WINDOW_SIZE,
         WINDOW_STEP,
     )
 
     all_entities: List[DetectedEntity] = []
-    for i in range(0, len(transcriptions) - WINDOW_SIZE + 1, WINDOW_STEP):
-        window_files = transcriptions[i : i + WINDOW_SIZE]
-        window_page_numbers = [_extract_number_from_filename(p) for p in window_files]
-        
-        logger.info("Processing window: pages %s", window_page_numbers)
 
-        # Concatenate the text from all files in the current window.
-        window_text = "\n\n---\n\n".join(p.read_text() for p in window_files)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_window = {
+            executor.submit(_process_window, window, client, prompt_template): window
+            for window in windows_to_process
+        }
 
-        try:
-            # The schema expects a single object containing a list of entities.
-            response_data = client.generate_structured_from_text(
-                prompt_template=prompt_template,
-                text_input=window_text,
-                response_schema=LLMResponse,
-            )
-
-            if response_data and response_data.entities:
-                extracted_entities = response_data.entities
-                # Convert the LLM output to our application-level schema
-                # and enrich it with the page numbers from the window.
-                for item in extracted_entities:
-                    entity = DetectedEntity(
-                        **item.model_dump(),
-                        page_numbers=window_page_numbers,
-                    )
-                    all_entities.append(entity)
-
-                logger.info(
-                    "Extracted %d entities from window %s.",
-                    len(extracted_entities),
-                    window_page_numbers,
+        for i, future in enumerate(
+            concurrent.futures.as_completed(future_to_window), 1
+        ):
+            window = future_to_window[future]
+            try:
+                entities_from_window = future.result()
+                if entities_from_window:
+                    all_entities.extend(entities_from_window)
+            except Exception as exc:
+                window_key = tuple(_extract_number_from_filename(p) for p in window)
+                logger.error(
+                    "[%d/%d] Window %s generated an unexpected exception: %s",
+                    i,
+                    len(windows_to_process),
+                    list(window_key),
+                    exc,
                 )
-
-        except Exception as exc:
-            logger.error(
-                "Failed to extract entities from window %s: %s", window_page_numbers, exc
-            )
 
     # Deduplicate entities based on their `full_identifier`. When duplicates
     # are found, the entity from a later page (the last one seen) is kept,
@@ -252,6 +304,9 @@ def run_entity_extraction(
         final_entities = deduplicate_entities_by_similarity(
             entities=final_entities, client=client
         )
+
+    # Sort entities by their first page number.
+    final_entities.sort(key=lambda e: min(e.page_numbers))
 
     # Save the final list of entities to a JSON file.
     output_path = Path("output/entities.json")
@@ -327,6 +382,7 @@ def main() -> None:
             input_dir=output_dir,
             client=client,
             prompt_template=prompts.ENTITY_EXTRACTION_PROMPT,
+            max_workers=MAX_WORKERS,
         )
 
 

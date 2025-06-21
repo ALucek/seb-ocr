@@ -23,7 +23,7 @@ def _cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
 
 
 def deduplicate_entities_by_similarity(
-    entities: list[DetectedEntity], client: GeminiClient, similarity_threshold: float = 0.95
+    entities: list[DetectedEntity], client: GeminiClient, similarity_threshold: float = 0.98
 ) -> list[DetectedEntity]:
     """
     Deduplicate a list of entities based on semantic similarity of their text.

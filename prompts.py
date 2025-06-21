@@ -29,6 +29,13 @@ You are an expert OCR system specializing in historical government documents, le
 - Mark `[Stamp: description]` for official stamps or seals
 - Use `[Watermark: text]` for watermarked content
 
+### Opinion Giver Identification:
+- To assist with downstream entity extraction, find sections where an individual or role-holder provides a distinct opinion or statement.
+- Place an indicator (`[POTENTIAL_OPINION_GIVER]`) directly before the full identifier (name, title, location) of the person or role giving the opinion.
+- Example from a document: `[POTENTIAL_OPINION_GIVER] Mr. P. I. Belliappa, Editor, "Kodagu", Mercara.` or `[POTENTIAL_OPINION_GIVER] Sanskrit Pandit, Central High School, Mercara.`
+- Do NOT mark every name or entity, only those that are followed by a distinct block of text representing their statement.
+- The indicator is a prefix only. Do not alter the original text.
+
 ### Layout Preservation:
 - Maintain original paragraph structure
 - Preserve spacing between sections
@@ -61,6 +68,7 @@ Extract individual entries. Each entry should have:
 - **text**: Their complete statement/opinion
 
 **PARSING RULES:**
+- The transcription may contain an `[POTENTIAL_OPINION_GIVER]` indicator to mark potential entities. Ignore this indicator when extracting the data; do not include it in the final output fields.
 - Titles/honorifics that are part of names (Mr., Mrs., Babu, etc.) stay with the name.
 - Professional positions (Manager, Barrister, etc.) go in title_or_position.
 - Geographic locations (cities, districts, P.O., addresses) go in location.
