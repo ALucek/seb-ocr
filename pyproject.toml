@@ -11,6 +11,7 @@ dependencies = [
     "tenacity>=8.4.1",
     "google-api-core>=2.25.1",
     "google-genai>=1.21.1",
+    "pydantic>=2.11.7",
 ]
 
 [project.scripts]

@@ -10,6 +10,7 @@ wheels/
 .venv
 /input_images
 /output_text
+/output
 
 .env
 .DS_Store

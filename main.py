@@ -6,18 +6,51 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Type, Union
 
 from dotenv import load_dotenv
+from tenacity import (
+    retry,
+    retry_if_not_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from gemini_client import GeminiClient
 import prompts
+from similarity import deduplicate_entities_by_similarity
+
+from pydantic import BaseModel
+from schemas import DetectedEntity, EntityFromLLM, LLMResponse
 
 logger = logging.getLogger(__name__)
 logging.getLogger("google_genai.models").setLevel(logging.WARNING)
 
 # The maximum number of concurrent workers for processing images.
 MAX_WORKERS = 10
+
+# Configuration for the sliding window entity extraction.
+WINDOW_SIZE = 3  # Number of pages to include in each window.
+WINDOW_STEP = 1  # Number of pages to slide the window forward.
+
+
+class ExtractedEntities(BaseModel):
+    """A container for the final list of extracted entities."""
+
+    entities: List[DetectedEntity]
+
+
+def _log_retry_attempt(retry_state):
+    """Log information before we sleep between retry attempts."""
+    # The first argument to process_image is image_path
+    image_path = retry_state.args[0]
+    logging.warning(
+        "Retrying processing for %s due to error: %s. Attempt #%d, waiting %.2fs…",
+        image_path.name,
+        retry_state.outcome.exception(),
+        retry_state.attempt_number,
+        retry_state.next_action.sleep,
+    )
 
 
 def _extract_number_from_filename(path: Path) -> int:
@@ -37,14 +70,36 @@ def _discover_images(directory: Path) -> List[Path]:
     return paths
 
 
-def process_image(image_path: Path, client: GeminiClient, prompt: str) -> dict | str:
-    """Run the Gemini client on *image_path* using *prompt*."""
-    structured_text = client.generate(prompt=prompt, image_path=image_path)
-    try:
-        return json.loads(structured_text)
-    except json.JSONDecodeError:
-        logger.error("Failed to decode JSON for %s", image_path.name)
-        return structured_text
+def _discover_transcriptions(directory: Path) -> List[Path]:
+    """Return a sorted list of transcription files inside *directory*."""
+    paths = sorted(directory.glob("*.txt"), key=_extract_number_from_filename)
+    return paths
+
+
+@retry(
+    retry=retry_if_not_exception_type(FileNotFoundError),
+    wait=wait_exponential(multiplier=1, min=4, max=60),
+    stop=stop_after_attempt(3),
+    before_sleep=_log_retry_attempt,
+)
+def process_image(
+    image_path: Path,
+    client: GeminiClient,
+    prompt: str,
+) -> str:
+    """Run the Gemini client on *image_path* using *prompt* to get transcription."""
+
+    # We only expect text back for transcription
+    result = client.generate(prompt=prompt, image_path=image_path)
+
+    if not isinstance(result, str):
+        logger.warning(
+            "Expected a string from Gemini for transcription of %s, but got %s. Converting.",
+            image_path.name,
+            type(result).__name__,
+        )
+        return str(result)
+    return result
 
 
 def process_directory(
@@ -54,7 +109,7 @@ def process_directory(
     prompt: str,
     max_workers: int = MAX_WORKERS,
 ) -> None:
-    """Process every supported image inside *input_dir* and write JSON to *output_dir*."""
+    """Process every supported image inside *input_dir* and write transcriptions to *output_dir*."""
     all_images = _discover_images(input_dir)
     if not all_images:
         logger.warning("No images found in '%s'. Please add some images to process.", input_dir)
@@ -62,9 +117,8 @@ def process_directory(
 
     images_to_process = []
     for path in all_images:
-        json_output = output_dir / f"{path.stem}.json"
-        error_output = output_dir / f"{path.stem}_error.txt"
-        if not (json_output.exists() or error_output.exists()):
+        txt_output = output_dir / f"{path.stem}.txt"
+        if not txt_output.exists():
             images_to_process.append(path)
 
     total_found = len(all_images)
@@ -79,7 +133,7 @@ def process_directory(
         logger.info("All images have already been processed. Nothing to do.")
         return
 
-    logger.info("Starting OCR process for %d new images…", total_to_process)
+    logger.info("Starting transcription process for %d new images…", total_to_process)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_path = {
@@ -92,33 +146,118 @@ def process_directory(
             try:
                 result = future.result()
                 logger.info(
-                    "[%d/%d] Finished processing %s.",
+                    "[%d/%d] Finished transcribing %s.",
                     i,
                     total_to_process,
                     path.name,
                 )
 
-                if isinstance(result, dict):
-                    target_file = output_dir / f"{path.stem}.json"
-                    with target_file.open("w") as fh:
-                        json.dump(result, fh, indent=4)
-                else:
-                    target_file = output_dir / f"{path.stem}_error.txt"
-                    target_file.write_text(result)
+                target_file = output_dir / f"{path.stem}.txt"
+                target_file.write_text(result)
 
-                logger.info("Saved output to %s", target_file)
+                logger.info("Saved transcription to %s", target_file)
 
             except Exception as exc:
                 logger.error(
-                    "[%d/%d] Processing %s generated an exception: %s",
+                    "[%d/%d] Failed to process %s after multiple retries: %s",
                     i,
                     total_to_process,
                     path.name,
                     exc,
                 )
-                error_file = output_dir / f"{path.stem}_error.txt"
-                error_file.write_text(str(exc))
-                logger.info("Saved error to %s", error_file)
+
+
+def run_entity_extraction(
+    input_dir: Path, client: GeminiClient, prompt_template: str
+) -> None:
+    """
+    Run entity extraction on transcribed text files using a sliding window.
+
+    This function reads text files from *input_dir*, processes them in
+    overlapping windows to handle context that spans multiple pages, extracts
+    structured entities, deduplicates the results, and saves them to a
+    JSON file.
+    """
+    transcriptions = _discover_transcriptions(input_dir)
+    if not transcriptions:
+        logger.info("No transcriptions found in '%s' to extract entities from.", input_dir)
+        return
+
+    logger.info(
+        "Found %d transcriptions. Starting entity extraction with window size %d and step %d.",
+        len(transcriptions),
+        WINDOW_SIZE,
+        WINDOW_STEP,
+    )
+
+    all_entities: List[DetectedEntity] = []
+    for i in range(0, len(transcriptions) - WINDOW_SIZE + 1, WINDOW_STEP):
+        window_files = transcriptions[i : i + WINDOW_SIZE]
+        window_page_numbers = [_extract_number_from_filename(p) for p in window_files]
+        
+        logger.info("Processing window: pages %s", window_page_numbers)
+
+        # Concatenate the text from all files in the current window.
+        window_text = "\n\n---\n\n".join(p.read_text() for p in window_files)
+
+        try:
+            # The schema expects a single object containing a list of entities.
+            response_data = client.generate_structured_from_text(
+                prompt_template=prompt_template,
+                text_input=window_text,
+                response_schema=LLMResponse,
+            )
+
+            if response_data and response_data.entities:
+                extracted_entities = response_data.entities
+                # Convert the LLM output to our application-level schema
+                # and enrich it with the page numbers from the window.
+                for item in extracted_entities:
+                    entity = DetectedEntity(
+                        **item.model_dump(),
+                        page_numbers=window_page_numbers,
+                    )
+                    all_entities.append(entity)
+
+                logger.info(
+                    "Extracted %d entities from window %s.",
+                    len(extracted_entities),
+                    window_page_numbers,
+                )
+
+        except Exception as exc:
+            logger.error(
+                "Failed to extract entities from window %s: %s", window_page_numbers, exc
+            )
+
+    # Deduplicate entities based on their `full_identifier`. When duplicates
+    # are found, the entity from a later page (the last one seen) is kept,
+    # as it is assumed to be more complete from a wider context window.
+    unique_entities: dict[str, DetectedEntity] = {}
+    for entity in all_entities:
+        # By overwriting the dictionary entry, we ensure that the last seen
+        # version of an entity is the one that's kept.
+        unique_entities[entity.full_identifier] = entity
+
+    final_entities = list(unique_entities.values())
+    logger.info(
+        "Extracted %d total entities, with %d unique entities after initial deduplication.",
+        len(all_entities),
+        len(final_entities),
+    )
+
+    # Stage 2: Perform semantic deduplication on the remaining entities.
+    if len(final_entities) > 1:
+        final_entities = deduplicate_entities_by_similarity(
+            entities=final_entities, client=client
+        )
+
+    # Save the final list of entities to a JSON file.
+    output_path = Path("output/entities.json")
+    output_data = ExtractedEntities(entities=final_entities)
+    output_path.write_text(output_data.model_dump_json(indent=2))
+
+    logger.info("Saved %d unique entities to %s", len(final_entities), output_path)
 
 
 def main() -> None:
@@ -130,7 +269,7 @@ def main() -> None:
     logging.getLogger("googleapiclient.http").setLevel(logging.WARNING)
     load_dotenv()
 
-    prompt_name = os.environ.get("PROMPT", "HISTORICAL_DOCUMENT_PROMPT")
+    prompt_name = os.environ.get("PROMPT", "TRANSCRIPTION_PROMPT")
     prompt_text = getattr(prompts, prompt_name, None)
 
     if prompt_text is None:
@@ -138,13 +277,13 @@ def main() -> None:
             "Prompt '%s' not found in prompts.py. Falling back to default.",
             prompt_name,
         )
-        prompt_name = "HISTORICAL_DOCUMENT_PROMPT"
-        prompt_text = prompts.HISTORICAL_DOCUMENT_PROMPT
+        prompt_name = "TRANSCRIPTION_PROMPT"
+        prompt_text = prompts.TRANSCRIPTION_PROMPT
 
     logger.info("Using prompt: '%s'", prompt_name)
 
     input_dir = Path("input_images")
-    output_dir = Path("output_text")
+    output_dir = Path("output")
 
     input_dir.mkdir(exist_ok=True)
     output_dir.mkdir(exist_ok=True)
@@ -156,7 +295,21 @@ def main() -> None:
         logger.error("Please ensure GEMINI_API_KEY is available as an environment variable or inside a .env file.")
         return
 
-    process_directory(input_dir, output_dir, client, prompt=prompt_text)
+    # Stage 1: Transcribe images to text.
+    process_directory(
+        input_dir,
+        output_dir,
+        client,
+        prompt=prompt_text,
+    )
+
+    # Stage 2: Extract structured entities from transcriptions.
+    logger.info("--- Starting Entity Extraction Stage ---")
+    run_entity_extraction(
+        input_dir=output_dir,
+        client=client,
+        prompt_template=prompts.ENTITY_EXTRACTION_PROMPT,
+    )
 
 
 if __name__ == "__main__":
